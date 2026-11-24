@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package kv.v1;
+
+option go_package = "yoti/api/kv/v1;kvv1";
+
+import "google/protobuf/empty.proto";
+
+service KeyValueStore {
+  rpc Store(StoreRequest) returns (StoreResponse);
+  rpc Retrieve(RetrieveRequest) returns (RetrieveResponse);
+  rpc Update(UpdateRequest) returns (google.protobuf.Empty);
+  rpc Delete(DeleteRequest) returns (google.protobuf.Empty);
+}
+
+message StoreRequest {
+  string id = 1;
+  bytes data = 2;
+}
+
+message StoreResponse {
+  bytes key = 1;
+}
+
+message RetrieveRequest {
+  string id = 1;
+  bytes key = 2;
+}
+
+message RetrieveResponse {
+  bytes data = 1;
+}
+
+message UpdateRequest {
+  string id = 1;
+  bytes key = 2;
+  bytes data = 3;
+}
+
+message DeleteRequest {
+  string id = 1;
+  bytes key = 2;
+}
