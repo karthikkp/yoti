@@ -9,6 +9,9 @@ var store = map[int]string{}
 var mu sync.Mutex
 
 func Store(id int, data string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
 	_, ok := store[id]
 	if !ok {
 		store[id] = data
@@ -18,6 +21,8 @@ func Store(id int, data string) error {
 }
 
 func Retrieve(id int) (string, error) {
+	mu.Lock()
+	defer mu.Unlock()
 	val, ok := store[id]
 	if ok {
 		return val, nil
@@ -26,6 +31,8 @@ func Retrieve(id int) (string, error) {
 }
 
 func Update(id int, data string) error {
+	mu.Lock()
+	defer mu.Unlock()
 	_, ok := store[id]
 	if !ok {
 		return errors.New("ID NOT FOUND")
@@ -36,6 +43,8 @@ func Update(id int, data string) error {
 }
 
 func Delete(id int) error {
+	mu.Lock()
+	defer mu.Unlock()
 	_, ok := store[id]
 	if !ok {
 		return errors.New("ID NOT FOUND")
