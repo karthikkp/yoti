@@ -53,7 +53,13 @@ func Store(id int, data []byte) ([]byte, error) {
 	_, ok := store[id]
 	if !ok {
 		key := generateKey()
-		store[id] = data
+
+		encrypted, err := encrypt(data, key)
+		if err != nil {
+			return nil, err
+		}
+
+		store[id] = encrypted
 		return key, nil
 	}
 	return nil, errors.New("ID already exists")
@@ -64,7 +70,7 @@ func Retrieve(id int, key []byte) ([]byte, error) {
 	defer mu.Unlock()
 	val, ok := store[id]
 	if ok {
-		return val, nil
+		return decrypt(val, key)
 	}
 	return nil, errors.New("ID NOT FOUND")
 }
@@ -72,23 +78,33 @@ func Retrieve(id int, key []byte) ([]byte, error) {
 func Update(id int, key, data []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
-	_, ok := store[id]
+
+	existing, ok := store[id]
 	if !ok {
 		return errors.New("ID NOT FOUND")
 	}
 
-	store[id] = data
+	_, err := decrypt(existing, key)
+	if err != nil {
+		return err
+	}
+
+	encrypted, err := encrypt(data, key)
+	if err != nil {
+		return err
+	}
+
+	store[id] = encrypted
 	return nil
 }
 
 func Delete(id int, key []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
-	_, ok := store[id]
-	if !ok {
-		return errors.New("ID NOT FOUND")
+	_, err := decrypt(store[id], key)
+	if err != nil {
+		return err
 	}
-
 	delete(store, id)
 	return nil
 }

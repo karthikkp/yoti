@@ -20,6 +20,7 @@ func TestStoreAndRetrieve(t *testing.T) {
 			got, err := Retrieve(id, key)
 			if err != nil {
 				t.Error("Retrieve failed:", err)
+				return
 			}
 
 			if string(got) != "hello" {
@@ -43,6 +44,11 @@ func TestUpdate(t *testing.T) {
 	err = Update(id, key, []byte("updated"))
 	if err != nil {
 		t.Fatal("Update failed:", err)
+	}
+
+	err = Update(id, generateKey(), []byte("unauthorized"))
+	if err == nil {
+		t.Fatal("Update accepted the wrong key")
 	}
 
 	got, err := Retrieve(id, key)
@@ -74,6 +80,13 @@ func TestDelete(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = Delete(id, key) })
 
+	// Wrong key: deletion must fail.
+	err = Delete(id, generateKey())
+	if err == nil {
+		t.Fatal("Delete accepted the wrong key")
+	}
+
+	// Correct key: deletion must succeed.
 	err = Delete(id, key)
 	if err != nil {
 		t.Fatal("Delete failed:", err)
@@ -84,6 +97,7 @@ func TestDelete(t *testing.T) {
 		t.Fatal("entry still exists after Delete")
 	}
 
+	// Deleting it again must fail.
 	err = Delete(id, key)
 	if err == nil {
 		t.Fatal("expected an error for a missing ID")
