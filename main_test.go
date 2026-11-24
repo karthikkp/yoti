@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -9,7 +10,7 @@ func TestStoreAndRetrieve(t *testing.T) {
 	var wg sync.WaitGroup
 	for id := 0; id < 50; id++ {
 		wg.Add(1)
-		go func(id int, t *testing.T) {
+		go func(id string, t *testing.T) {
 			defer wg.Done()
 			key, err := Store(id, []byte("hello"))
 			if err != nil {
@@ -26,14 +27,14 @@ func TestStoreAndRetrieve(t *testing.T) {
 			if string(got) != "hello" {
 				t.Error("expected hello, got:", string(got))
 			}
-		}(id, t)
+		}(strconv.Itoa(id), t)
 	}
 	wg.Wait()
 
 }
 
 func TestUpdate(t *testing.T) {
-	const id = 1001
+	const id = "1001"
 
 	key, err := Store(id, []byte("original"))
 	if err != nil {
@@ -60,19 +61,19 @@ func TestUpdate(t *testing.T) {
 		t.Fatal("expected updated, got:", string(got))
 	}
 
-	err = Update(1999, key, []byte("anything"))
+	err = Update("1999", key, []byte("anything"))
 	if err == nil {
 		t.Fatal("expected an error for a missing ID")
 	}
 
-	_, err = Retrieve(1999, key)
+	_, err = Retrieve("1999", key)
 	if err == nil {
 		t.Fatal("failed Update created an entry")
 	}
 }
 
 func TestDelete(t *testing.T) {
-	const id = 2001
+	const id = "2001"
 
 	key, err := Store(id, []byte("hello"))
 	if err != nil {

@@ -5,10 +5,16 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"errors"
+	"log"
+	"net"
 	"sync"
+
+	kvv1 "yoti/api/kv/v1"
+
+	"google.golang.org/grpc"
 )
 
-var store = map[int][]byte{}
+var store = map[string][]byte{}
 var mu sync.Mutex
 
 func generateKey() []byte {
@@ -46,7 +52,7 @@ func decrypt(encrypted, key []byte) ([]byte, error) {
 	return gcm.Open(nil, nil, encrypted, nil)
 }
 
-func Store(id int, data []byte) ([]byte, error) {
+func Store(id string, data []byte) ([]byte, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -65,7 +71,7 @@ func Store(id int, data []byte) ([]byte, error) {
 	return nil, errors.New("ID already exists")
 }
 
-func Retrieve(id int, key []byte) ([]byte, error) {
+func Retrieve(id string, key []byte) ([]byte, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	val, ok := store[id]
@@ -75,7 +81,7 @@ func Retrieve(id int, key []byte) ([]byte, error) {
 	return nil, errors.New("ID NOT FOUND")
 }
 
-func Update(id int, key, data []byte) error {
+func Update(id string, key, data []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -98,7 +104,7 @@ func Update(id int, key, data []byte) error {
 	return nil
 }
 
-func Delete(id int, key []byte) error {
+func Delete(id string, key []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
 	_, err := decrypt(store[id], key)
@@ -110,5 +116,17 @@ func Delete(id int, key []byte) error {
 }
 
 func main() {
+	listener, err := net.Listen("tcp", "127.0.0.1:50051")
+	if err != nil {
+		log.Fatal(err)
+	}
 
+	server := grpc.NewServer()
+	kvv1.RegisterKeyValueStoreServer(server, &kvServer{})
+
+	log.Println("listening on 127.0.0.1:50051")
+
+	if err := server.Serve(listener); err != nil {
+		log.Fatal(err)
+	}
 }
