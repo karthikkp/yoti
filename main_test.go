@@ -29,3 +29,35 @@ func TestStoreAndRetrieve(t *testing.T) {
 	wg.Wait()
 
 }
+
+func TestEncryptionRoundTrip(t *testing.T) {
+	key := generateKey()
+
+	// Encrypt the original data.
+	encrypted, err := encrypt([]byte("hello"), key)
+	if err != nil {
+		t.Fatal("encrypt failed:", err)
+	}
+
+	// The correct key must recover the original data.
+	got, err := decrypt(encrypted, key)
+	if err != nil {
+		t.Fatal("decrypt failed:", err)
+	}
+
+	if string(got) != "hello" {
+		t.Fatal("expected hello, got:", string(got))
+	}
+
+	// A different key must fail.
+	wrongKey := generateKey()
+
+	data, err := decrypt(encrypted, wrongKey)
+	if err == nil {
+		t.Fatal("expected an error for the wrong key")
+	}
+
+	if len(data) != 0 {
+		t.Fatal("decryption returned data despite failing")
+	}
+}
