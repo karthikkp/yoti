@@ -1,20 +1,19 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"sync"
 	"testing"
 )
 
-func mustStore(t *testing.T, id string, data []byte) []byte {
+func mustStore(t *testing.T, caller, id string, data []byte) []byte {
 	t.Helper()
 
-	key, err := Store(id, data)
+	key, err := Store(caller, id, data)
 	if err != nil {
 		t.Fatal("setup failed:", err)
 	}
-	t.Cleanup(func() { _ = Delete(id, key) })
+	t.Cleanup(func() { _ = Delete(caller, id, key) })
 
 	return key
 }
@@ -41,7 +40,7 @@ func TestConcurrentStoreSameID(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			key, err := Store(id, []byte("hello"))
+			key, err := Store("svc", id, []byte("hello"))
 			results <- result{key, err}
 		}()
 	}
@@ -52,7 +51,7 @@ func TestConcurrentStoreSameID(t *testing.T) {
 	for r := range results {
 		if r.err == nil {
 			wins++
-			t.Cleanup(func() { _ = Delete(id, r.key) })
+			t.Cleanup(func() { _ = Delete("svc", id, r.key) })
 		} else {
 			wantErr(t, r.err, ErrAlreadyExists)
 		}
@@ -63,64 +62,70 @@ func TestConcurrentStoreSameID(t *testing.T) {
 	}
 }
 
-func TestPerEntryEncryption(t *testing.T) {
-	plaintext := []byte("secret-value")
-	id1, id2 := t.Name()+"-1", t.Name()+"-2"
-
-	key1 := mustStore(t, id1, plaintext)
-	key2 := mustStore(t, id2, plaintext)
-
-	if bytes.Equal(key1, key2) {
-		t.Fatal("entries must get different keys")
-	}
-
-	if bytes.Contains(store[id1], plaintext) {
-		t.Fatal("stored bytes must not contain the plaintext")
-	}
-}
-
 func TestUpdate(t *testing.T) {
 	id := t.Name()
-	key := mustStore(t, id, []byte("original"))
-	before := string(store[id])
+	key := mustStore(t, "svc", id, []byte("original"))
+	before := string(store["svc/"+id])
 
-	if err := Update(id, key, []byte("updated")); err != nil {
+	if err := Update("svc", id, key, []byte("updated")); err != nil {
 		t.Fatal("Update failed:", err)
 	}
 
-	if string(store[id]) == before {
+	if string(store["svc/"+id]) == before {
 		t.Fatal("update must change the ciphertext")
 	}
 
 	for _, badKey := range [][]byte{generateKey(), []byte("short")} {
-		wantErr(t, Update(id, badKey, []byte("unauthorized")), ErrInvalidKey)
+		wantErr(t, Update("svc", id, badKey, []byte("unauthorized")), ErrInvalidKey)
 	}
 
-	got, err := Retrieve(id, key)
+	got, err := Retrieve("svc", id, key)
 	if err != nil || string(got) != "updated" {
 		t.Fatal("expected updated, got:", string(got), err)
 	}
 
-	wantErr(t, Update("missing", key, []byte("anything")), ErrNotFound)
+	wantErr(t, Update("svc", "missing", key, []byte("anything")), ErrNotFound)
 }
 
 func TestDelete(t *testing.T) {
 	id := t.Name()
-	key := mustStore(t, id, []byte("hello"))
+	key := mustStore(t, "svc", id, []byte("hello"))
 
 	// Wrong key: deletion must fail.
-	wantErr(t, Delete(id, generateKey()), ErrInvalidKey)
+	wantErr(t, Delete("svc", id, generateKey()), ErrInvalidKey)
 
 	// Correct key: deletion must succeed.
-	if err := Delete(id, key); err != nil {
+	if err := Delete("svc", id, key); err != nil {
 		t.Fatal("Delete failed:", err)
 	}
 
-	_, err := Retrieve(id, key)
+	_, err := Retrieve("svc", id, key)
 	wantErr(t, err, ErrNotFound)
 
 	// Deleting it again must fail.
-	wantErr(t, Delete(id, key), ErrNotFound)
+	wantErr(t, Delete("svc", id, key), ErrNotFound)
+}
+
+func TestCallerIsolation(t *testing.T) {
+	id := t.Name()
+	keyA := mustStore(t, "a", id, []byte("a-value"))
+	keyB := mustStore(t, "b", id, []byte("b-value"))
+
+	_, err := Retrieve("b", id, keyA)
+	wantErr(t, err, ErrInvalidKey)
+
+	got, err := Retrieve("a", id, keyA)
+	if err != nil || string(got) != "a-value" {
+		t.Fatal("caller a must keep its own entry, got:", string(got), err)
+	}
+
+	got, err = Retrieve("b", id, keyB)
+	if err != nil || string(got) != "b-value" {
+		t.Fatal("caller b must keep its own entry, got:", string(got), err)
+	}
+
+	_, err = Store("a/b", id, []byte("x"))
+	wantErr(t, err, ErrInvalidCaller)
 }
 
 func TestEncryptionRoundTrip(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 
 	kvv1 "yoti/api/kv/v1"
@@ -22,6 +23,8 @@ var (
 	ErrNotFound      = errors.New("ID not found")
 	ErrAlreadyExists = errors.New("ID already exists")
 	ErrInvalidKey    = errors.New("invalid encryption key")
+	ErrInvalidCaller = errors.New("invalid caller")
+	ErrEmptyData     = errors.New("data must not be empty")
 )
 
 var debugMode = os.Getenv("DEBUG") == "1"
@@ -35,6 +38,13 @@ func printStoreLocked(operation string) {
 	for id, encrypted := range store {
 		log.Printf("id=%s ciphertext=%x", id, encrypted)
 	}
+}
+
+func scopedKey(caller, id string) (string, error) {
+	if caller == "" || strings.Contains(caller, "/") {
+		return "", ErrInvalidCaller
+	}
+	return caller + "/" + id, nil
 }
 
 func generateKey() []byte {
@@ -77,12 +87,21 @@ func decrypt(encrypted, key []byte) ([]byte, error) {
 	return data, nil
 }
 
-func Store(id string, data []byte) ([]byte, error) {
+func Store(caller, id string, data []byte) ([]byte, error) {
+	scoped, err := scopedKey(caller, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(data) == 0 {
+		return nil, ErrEmptyData
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 	defer printStoreLocked("STORE")
 
-	_, ok := store[id]
+	_, ok := store[scoped]
 	if !ok {
 		key := generateKey()
 
@@ -91,35 +110,49 @@ func Store(id string, data []byte) ([]byte, error) {
 			return nil, err
 		}
 
-		store[id] = encrypted
+		store[scoped] = encrypted
 		return key, nil
 	}
 	return nil, ErrAlreadyExists
 }
 
-func Retrieve(id string, key []byte) ([]byte, error) {
+func Retrieve(caller, id string, key []byte) ([]byte, error) {
+	scoped, err := scopedKey(caller, id)
+	if err != nil {
+		return nil, err
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 	defer printStoreLocked("STORE")
 
-	val, ok := store[id]
+	val, ok := store[scoped]
 	if ok {
 		return decrypt(val, key)
 	}
 	return nil, ErrNotFound
 }
 
-func Update(id string, key, data []byte) error {
+func Update(caller, id string, key, data []byte) error {
+	scoped, err := scopedKey(caller, id)
+	if err != nil {
+		return err
+	}
+
+	if len(data) == 0 {
+		return ErrEmptyData
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 	defer printStoreLocked("STORE")
 
-	existing, ok := store[id]
+	existing, ok := store[scoped]
 	if !ok {
 		return ErrNotFound
 	}
 
-	_, err := decrypt(existing, key)
+	_, err = decrypt(existing, key)
 	if err != nil {
 		return err
 	}
@@ -129,16 +162,21 @@ func Update(id string, key, data []byte) error {
 		return err
 	}
 
-	store[id] = encrypted
+	store[scoped] = encrypted
 	return nil
 }
 
-func Delete(id string, key []byte) error {
+func Delete(caller, id string, key []byte) error {
+	scoped, err := scopedKey(caller, id)
+	if err != nil {
+		return err
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 	defer printStoreLocked("STORE")
 
-	encrypted, ok := store[id]
+	encrypted, ok := store[scoped]
 	if !ok {
 		return ErrNotFound
 	}
@@ -147,7 +185,7 @@ func Delete(id string, key []byte) error {
 		return err
 	}
 
-	delete(store, id)
+	delete(store, scoped)
 	return nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -39,18 +40,21 @@ func newClient(t *testing.T) kvv1.KeyValueStoreClient {
 	return kvv1.NewKeyValueStoreClient(conn)
 }
 
-func testCtx(t *testing.T) context.Context {
+func callerCtx(t *testing.T, caller string) context.Context {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 
-	return ctx
+	if caller == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, "x-service-name", caller)
 }
 
 func TestGRPCFlow(t *testing.T) {
 	client := newClient(t)
-	ctx := testCtx(t)
+	ctx := callerCtx(t, "svc-a")
 	id := t.Name()
 
 	stored, err := client.Store(ctx, &kvv1.StoreRequest{Id: id, Data: []byte("hello")})
@@ -58,7 +62,7 @@ func TestGRPCFlow(t *testing.T) {
 		t.Fatal("Store failed:", err)
 	}
 	key := stored.GetKey()
-	t.Cleanup(func() { _ = Delete(id, key) })
+	t.Cleanup(func() { _ = Delete("svc-a", id, key) })
 
 	if len(key) != 32 {
 		t.Fatal("expected a 32-byte key")
@@ -67,6 +71,16 @@ func TestGRPCFlow(t *testing.T) {
 	_, err = client.Store(ctx, &kvv1.StoreRequest{Id: id, Data: []byte("replacement")})
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatal("expected AlreadyExists, got:", err)
+	}
+
+	_, err = client.Store(ctx, &kvv1.StoreRequest{Id: id + "-empty"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatal("expected InvalidArgument, got:", err)
+	}
+
+	_, err = client.Store(callerCtx(t, ""), &kvv1.StoreRequest{Id: id + "-anon", Data: []byte("x")})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatal("expected Unauthenticated without a service name, got:", err)
 	}
 
 	_, err = client.Update(ctx, &kvv1.UpdateRequest{Id: id, Key: key, Data: []byte("updated")})
@@ -92,26 +106,26 @@ func TestGRPCFlow(t *testing.T) {
 
 func TestGRPCPublicErrors(t *testing.T) {
 	client := newClient(t)
-	ctx := testCtx(t)
+	ctxA, ctxB := callerCtx(t, "svc-a"), callerCtx(t, "svc-b")
 	id := t.Name()
 
-	stored, err := client.Store(ctx, &kvv1.StoreRequest{Id: id, Data: []byte("hello")})
+	stored, err := client.Store(ctxA, &kvv1.StoreRequest{Id: id, Data: []byte("hello")})
 	if err != nil {
 		t.Fatal("Store failed:", err)
 	}
 	key := stored.GetKey()
-	t.Cleanup(func() { _ = Delete(id, key) })
+	t.Cleanup(func() { _ = Delete("svc-a", id, key) })
 
-	ops := map[string]func(string, []byte) error{
-		"Retrieve": func(id string, key []byte) error {
+	ops := map[string]func(context.Context, string, []byte) error{
+		"Retrieve": func(ctx context.Context, id string, key []byte) error {
 			_, err := client.Retrieve(ctx, &kvv1.RetrieveRequest{Id: id, Key: key})
 			return err
 		},
-		"Update": func(id string, key []byte) error {
+		"Update": func(ctx context.Context, id string, key []byte) error {
 			_, err := client.Update(ctx, &kvv1.UpdateRequest{Id: id, Key: key, Data: []byte("x")})
 			return err
 		},
-		"Delete": func(id string, key []byte) error {
+		"Delete": func(ctx context.Context, id string, key []byte) error {
 			_, err := client.Delete(ctx, &kvv1.DeleteRequest{Id: id, Key: key})
 			return err
 		},
@@ -119,16 +133,18 @@ func TestGRPCPublicErrors(t *testing.T) {
 
 	cases := []struct {
 		name string
+		ctx  context.Context
 		id   string
 		key  []byte
 	}{
-		{"wrong key", id, generateKey()},
-		{"missing entry", "missing", key},
+		{"wrong key", ctxA, id, generateKey()},
+		{"missing entry", ctxA, "missing", key},
+		{"other service with the right key", ctxB, id, key},
 	}
 
 	for op, call := range ops {
 		for _, c := range cases {
-			err := call(c.id, c.key)
+			err := call(c.ctx, c.id, c.key)
 			if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "entry unavailable" {
 				t.Errorf("%s/%s: expected NotFound entry unavailable, got: %v", op, c.name, err)
 			}
