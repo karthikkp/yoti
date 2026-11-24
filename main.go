@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-var store = map[int]string{}
+var store = map[int][]byte{}
 var mu sync.Mutex
 
 func generateKey() []byte {
@@ -46,29 +46,30 @@ func decrypt(encrypted, key []byte) ([]byte, error) {
 	return gcm.Open(nil, nil, encrypted, nil)
 }
 
-func Store(id int, data string) error {
+func Store(id int, data []byte) ([]byte, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
 	_, ok := store[id]
 	if !ok {
+		key := generateKey()
 		store[id] = data
-		return nil
+		return key, nil
 	}
-	return errors.New("ID already exists")
+	return nil, errors.New("ID already exists")
 }
 
-func Retrieve(id int) (string, error) {
+func Retrieve(id int, key []byte) ([]byte, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	val, ok := store[id]
 	if ok {
 		return val, nil
 	}
-	return "", errors.New("ID NOT FOUND")
+	return nil, errors.New("ID NOT FOUND")
 }
 
-func Update(id int, data string) error {
+func Update(id int, key, data []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
 	_, ok := store[id]
@@ -80,7 +81,7 @@ func Update(id int, data string) error {
 	return nil
 }
 
-func Delete(id int) error {
+func Delete(id int, key []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
 	_, ok := store[id]

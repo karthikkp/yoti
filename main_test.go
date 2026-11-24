@@ -11,18 +11,19 @@ func TestStoreAndRetrieve(t *testing.T) {
 		wg.Add(1)
 		go func(id int, t *testing.T) {
 			defer wg.Done()
-			err := Store(id, "hello")
+			key, err := Store(id, []byte("hello"))
 			if err != nil {
 				t.Error("Store failed:", err)
+				return
 			}
 
-			got, err := Retrieve(id)
+			got, err := Retrieve(id, key)
 			if err != nil {
 				t.Error("Retrieve failed:", err)
 			}
 
-			if got != "hello" {
-				t.Error("expected hello, got:", got)
+			if string(got) != "hello" {
+				t.Error("expected hello, got:", string(got))
 			}
 		}(id, t)
 	}
@@ -30,6 +31,64 @@ func TestStoreAndRetrieve(t *testing.T) {
 
 }
 
+func TestUpdate(t *testing.T) {
+	const id = 1001
+
+	key, err := Store(id, []byte("original"))
+	if err != nil {
+		t.Fatal("setup failed:", err)
+	}
+	t.Cleanup(func() { _ = Delete(id, key) })
+
+	err = Update(id, key, []byte("updated"))
+	if err != nil {
+		t.Fatal("Update failed:", err)
+	}
+
+	got, err := Retrieve(id, key)
+	if err != nil {
+		t.Fatal("Retrieve failed:", err)
+	}
+
+	if string(got) != "updated" {
+		t.Fatal("expected updated, got:", string(got))
+	}
+
+	err = Update(1999, key, []byte("anything"))
+	if err == nil {
+		t.Fatal("expected an error for a missing ID")
+	}
+
+	_, err = Retrieve(1999, key)
+	if err == nil {
+		t.Fatal("failed Update created an entry")
+	}
+}
+
+func TestDelete(t *testing.T) {
+	const id = 2001
+
+	key, err := Store(id, []byte("hello"))
+	if err != nil {
+		t.Fatal("setup failed:", err)
+	}
+	t.Cleanup(func() { _ = Delete(id, key) })
+
+	err = Delete(id, key)
+	if err != nil {
+		t.Fatal("Delete failed:", err)
+	}
+
+	_, err = Retrieve(id, key)
+	if err == nil {
+		t.Fatal("entry still exists after Delete")
+	}
+
+	err = Delete(id, key)
+	if err == nil {
+		t.Fatal("expected an error for a missing ID")
+	}
+}
 func TestEncryptionRoundTrip(t *testing.T) {
 	key := generateKey()
 
