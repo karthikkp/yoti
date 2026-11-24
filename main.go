@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net"
+	"os"
 	"sync"
 
 	kvv1 "yoti/api/kv/v1"
@@ -16,6 +17,25 @@ import (
 
 var store = map[string][]byte{}
 var mu sync.Mutex
+
+var (
+	ErrNotFound      = errors.New("ID not found")
+	ErrAlreadyExists = errors.New("ID already exists")
+	ErrInvalidKey    = errors.New("invalid encryption key")
+)
+
+var debugMode = os.Getenv("DEBUG") == "1"
+
+func printStoreLocked(operation string) {
+	if !debugMode {
+		return
+	}
+
+	log.Printf("%s: store has %d entries", operation, len(store))
+	for id, encrypted := range store {
+		log.Printf("id=%s ciphertext=%x", id, encrypted)
+	}
+}
 
 func generateKey() []byte {
 	key := make([]byte, 32)
@@ -41,7 +61,7 @@ func encrypt(data, key []byte) ([]byte, error) {
 func decrypt(encrypted, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		return nil, ErrInvalidKey
 	}
 
 	gcm, err := cipher.NewGCMWithRandomNonce(block)
@@ -49,12 +69,18 @@ func decrypt(encrypted, key []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return gcm.Open(nil, nil, encrypted, nil)
+	data, err := gcm.Open(nil, nil, encrypted, nil)
+	if err != nil {
+		return nil, ErrInvalidKey
+	}
+
+	return data, nil
 }
 
 func Store(id string, data []byte) ([]byte, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	defer printStoreLocked("STORE")
 
 	_, ok := store[id]
 	if !ok {
@@ -68,26 +94,29 @@ func Store(id string, data []byte) ([]byte, error) {
 		store[id] = encrypted
 		return key, nil
 	}
-	return nil, errors.New("ID already exists")
+	return nil, ErrAlreadyExists
 }
 
 func Retrieve(id string, key []byte) ([]byte, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	defer printStoreLocked("STORE")
+
 	val, ok := store[id]
 	if ok {
 		return decrypt(val, key)
 	}
-	return nil, errors.New("ID NOT FOUND")
+	return nil, ErrNotFound
 }
 
 func Update(id string, key, data []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
+	defer printStoreLocked("STORE")
 
 	existing, ok := store[id]
 	if !ok {
-		return errors.New("ID NOT FOUND")
+		return ErrNotFound
 	}
 
 	_, err := decrypt(existing, key)
@@ -107,10 +136,17 @@ func Update(id string, key, data []byte) error {
 func Delete(id string, key []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
-	_, err := decrypt(store[id], key)
-	if err != nil {
+	defer printStoreLocked("STORE")
+
+	encrypted, ok := store[id]
+	if !ok {
+		return ErrNotFound
+	}
+
+	if _, err := decrypt(encrypted, key); err != nil {
 		return err
 	}
+
 	delete(store, id)
 	return nil
 }

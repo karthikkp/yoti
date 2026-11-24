@@ -1,109 +1,128 @@
 package main
 
 import (
-	"strconv"
+	"bytes"
+	"errors"
 	"sync"
 	"testing"
 )
 
-func TestStoreAndRetrieve(t *testing.T) {
+func mustStore(t *testing.T, id string, data []byte) []byte {
+	t.Helper()
+
+	key, err := Store(id, data)
+	if err != nil {
+		t.Fatal("setup failed:", err)
+	}
+	t.Cleanup(func() { _ = Delete(id, key) })
+
+	return key
+}
+
+func wantErr(t *testing.T, got, want error) {
+	t.Helper()
+
+	if !errors.Is(got, want) {
+		t.Fatalf("expected %v, got: %v", want, got)
+	}
+}
+
+func TestConcurrentStoreSameID(t *testing.T) {
+	type result struct {
+		key []byte
+		err error
+	}
+
+	id := t.Name()
+	results := make(chan result, 20)
+
 	var wg sync.WaitGroup
-	for id := 0; id < 50; id++ {
+	for i := 0; i < cap(results); i++ {
 		wg.Add(1)
-		go func(id string, t *testing.T) {
+		go func() {
 			defer wg.Done()
 			key, err := Store(id, []byte("hello"))
-			if err != nil {
-				t.Error("Store failed:", err)
-				return
-			}
-
-			got, err := Retrieve(id, key)
-			if err != nil {
-				t.Error("Retrieve failed:", err)
-				return
-			}
-
-			if string(got) != "hello" {
-				t.Error("expected hello, got:", string(got))
-			}
-		}(strconv.Itoa(id), t)
+			results <- result{key, err}
+		}()
 	}
 	wg.Wait()
+	close(results)
 
+	wins := 0
+	for r := range results {
+		if r.err == nil {
+			wins++
+			t.Cleanup(func() { _ = Delete(id, r.key) })
+		} else {
+			wantErr(t, r.err, ErrAlreadyExists)
+		}
+	}
+
+	if wins != 1 {
+		t.Fatal("expected exactly one Store to win, got:", wins)
+	}
+}
+
+func TestPerEntryEncryption(t *testing.T) {
+	plaintext := []byte("secret-value")
+	id1, id2 := t.Name()+"-1", t.Name()+"-2"
+
+	key1 := mustStore(t, id1, plaintext)
+	key2 := mustStore(t, id2, plaintext)
+
+	if bytes.Equal(key1, key2) {
+		t.Fatal("entries must get different keys")
+	}
+
+	if bytes.Contains(store[id1], plaintext) {
+		t.Fatal("stored bytes must not contain the plaintext")
+	}
 }
 
 func TestUpdate(t *testing.T) {
-	const id = "1001"
+	id := t.Name()
+	key := mustStore(t, id, []byte("original"))
+	before := string(store[id])
 
-	key, err := Store(id, []byte("original"))
-	if err != nil {
-		t.Fatal("setup failed:", err)
-	}
-	t.Cleanup(func() { _ = Delete(id, key) })
-
-	err = Update(id, key, []byte("updated"))
-	if err != nil {
+	if err := Update(id, key, []byte("updated")); err != nil {
 		t.Fatal("Update failed:", err)
 	}
 
-	err = Update(id, generateKey(), []byte("unauthorized"))
-	if err == nil {
-		t.Fatal("Update accepted the wrong key")
+	if string(store[id]) == before {
+		t.Fatal("update must change the ciphertext")
+	}
+
+	for _, badKey := range [][]byte{generateKey(), []byte("short")} {
+		wantErr(t, Update(id, badKey, []byte("unauthorized")), ErrInvalidKey)
 	}
 
 	got, err := Retrieve(id, key)
-	if err != nil {
-		t.Fatal("Retrieve failed:", err)
+	if err != nil || string(got) != "updated" {
+		t.Fatal("expected updated, got:", string(got), err)
 	}
 
-	if string(got) != "updated" {
-		t.Fatal("expected updated, got:", string(got))
-	}
-
-	err = Update("1999", key, []byte("anything"))
-	if err == nil {
-		t.Fatal("expected an error for a missing ID")
-	}
-
-	_, err = Retrieve("1999", key)
-	if err == nil {
-		t.Fatal("failed Update created an entry")
-	}
+	wantErr(t, Update("missing", key, []byte("anything")), ErrNotFound)
 }
 
 func TestDelete(t *testing.T) {
-	const id = "2001"
-
-	key, err := Store(id, []byte("hello"))
-	if err != nil {
-		t.Fatal("setup failed:", err)
-	}
-	t.Cleanup(func() { _ = Delete(id, key) })
+	id := t.Name()
+	key := mustStore(t, id, []byte("hello"))
 
 	// Wrong key: deletion must fail.
-	err = Delete(id, generateKey())
-	if err == nil {
-		t.Fatal("Delete accepted the wrong key")
-	}
+	wantErr(t, Delete(id, generateKey()), ErrInvalidKey)
 
 	// Correct key: deletion must succeed.
-	err = Delete(id, key)
-	if err != nil {
+	if err := Delete(id, key); err != nil {
 		t.Fatal("Delete failed:", err)
 	}
 
-	_, err = Retrieve(id, key)
-	if err == nil {
-		t.Fatal("entry still exists after Delete")
-	}
+	_, err := Retrieve(id, key)
+	wantErr(t, err, ErrNotFound)
 
 	// Deleting it again must fail.
-	err = Delete(id, key)
-	if err == nil {
-		t.Fatal("expected an error for a missing ID")
-	}
+	wantErr(t, Delete(id, key), ErrNotFound)
 }
+
 func TestEncryptionRoundTrip(t *testing.T) {
 	key := generateKey()
 
@@ -127,8 +146,8 @@ func TestEncryptionRoundTrip(t *testing.T) {
 	wrongKey := generateKey()
 
 	data, err := decrypt(encrypted, wrongKey)
-	if err == nil {
-		t.Fatal("expected an error for the wrong key")
+	if !errors.Is(err, ErrInvalidKey) {
+		t.Fatal("expected ErrInvalidKey, got:", err)
 	}
 
 	if len(data) != 0 {
